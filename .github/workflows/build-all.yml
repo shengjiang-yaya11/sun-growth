@@ -21,10 +21,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory /__w/sun-growth/sun-growth
+
       - name: Build ESP32 firmware
         working-directory: esp32_firmware
         run: |
           . /opt/esp/idf/export.sh
+          rm -f dependencies.lock
           idf.py set-target esp32s3
           idf.py build
 
@@ -49,38 +53,45 @@ jobs:
           - os: ubuntu-latest
             name: linux-gui-amd64
             goarch: amd64
+            goos: linux
             cgo: 1
             ext: ""
           - os: ubuntu-latest
             name: linux-nas-amd64
             goarch: amd64
+            goos: linux
             cgo: 0
             ext: ""
             tags: headless
           - os: ubuntu-latest
             name: linux-nas-arm64
             goarch: arm64
+            goos: linux
             cgo: 0
             ext: ""
             tags: headless
           - os: macos-latest
             name: darwin-arm64
             goarch: arm64
+            goos: darwin
             cgo: 1
             ext: ""
           - os: macos-13
             name: darwin-amd64
             goarch: amd64
+            goos: darwin
             cgo: 1
             ext: ""
           - os: windows-latest
             name: windows-gui
             goarch: amd64
+            goos: windows
             cgo: 1
             ext: ".exe"
           - os: windows-latest
             name: windows-headless
             goarch: amd64
+            goos: windows
             cgo: 0
             ext: ".exe"
             tags: headless
@@ -100,10 +111,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev xorg-dev gcc libc6-dev
 
-      - name: Build
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
         working-directory: storage_server
         env:
-          GOOS: ${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'darwin' || 'windows' }}
+          GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: ${{ matrix.cgo }}
         run: |
@@ -111,6 +123,19 @@ jobs:
           OUTPUT="sun-growth-${{ matrix.name }}${{ matrix.ext }}"
           go build -tags "${BUILD_TAGS}" -o "../dist/${OUTPUT}" .
           echo "Built: dist/${OUTPUT}"
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        working-directory: storage_server
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: |
+          $env:BUILD_TAGS = "${{ matrix.tags }}"
+          $env:OUTPUT = "sun-growth-${{ matrix.name }}${{ matrix.ext }}"
+          go build -tags "$env:BUILD_TAGS" -o "../dist/$env:OUTPUT" .
+          Write-Host "Built: dist/$env:OUTPUT"
 
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v4
