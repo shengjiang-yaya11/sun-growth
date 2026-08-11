@@ -37,4 +37,5 @@ public:
 private:
     static bool initialized_;
     static bool connected_;
+    static bool connecting_;
 };

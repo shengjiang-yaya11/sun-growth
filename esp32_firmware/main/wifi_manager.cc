@@ -1,63 +1,73 @@
 /*
- * ============================================================
- *  【ESP32 端固件】烧录目标: ESP32-S3 CAM V1.1 开发板
- *  编译工具链: ESP-IDF v5.x + Xtensa gcc (不依赖电脑端软件)
- *  烧录方式: USB 连接开发板, 运行 idf.py flash
- * ============================================================
- *
- * wifi_manager.cc - WiFi 连接管理实现
+ * wifi_manager.cc - WiFi 连接管理 (v3.1 指数退避版)
  */
 
 #include "wifi_manager.h"
 #include "config.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_netif.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/timers.h"
 #include <cstring>
 
 static const char* TAG = "WIFI";
 bool WifiManager::initialized_ = false;
 bool WifiManager::connected_ = false;
+bool WifiManager::connecting_ = false;
 
 static EventGroupHandle_t s_wifiEventGroup;
 static const int WIFI_CONNECTED_BIT = BIT0;
 static const int WIFI_FAIL_BIT      = BIT1;
 static int s_retryCount = 0;
+static TimerHandle_t s_reconnectTimer = nullptr;
+
+static void reconnectTimerCB(TimerHandle_t) {
+    WifiManager::connecting_ = false;
+    WifiManager::connect();
+}
 
 static void wifiEventHandler(void* arg, esp_event_base_t base,
                              int32_t id, void* data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t* ev = (wifi_event_sta_disconnected_t*)data;
         WifiManager::setConnected(false);
-        if (s_retryCount < 5) {
-            esp_wifi_connect();
-            s_retryCount++;
-            ESP_LOGW(TAG, "重连中... (%d)", s_retryCount);
+        WifiManager::connecting_ = false;
+        ESP_LOGW(TAG, "WiFi 断开 (reason=%d), 重试 #%d", ev->reason, s_retryCount + 1);
+        
+        // 指数退避: 1s, 2s, 4s, 8s, 16s, 32s, 60s (max)
+        uint32_t delay = (1u << s_retryCount) * 1000;
+        if (delay > 60000) delay = 60000;
+        s_retryCount++;
+        
+        ESP_LOGI(TAG, "%d ms 后重连...", (int)delay);
+        if (!s_reconnectTimer) {
+            s_reconnectTimer = xTimerCreate("wifiRetry",
+                pdMS_TO_TICKS(delay), pdFALSE, nullptr, reconnectTimerCB);
         } else {
-            xEventGroupSetBits(s_wifiEventGroup, WIFI_FAIL_BIT);
+            xTimerChangePeriod(s_reconnectTimer, pdMS_TO_TICKS(delay), 0);
         }
+        xTimerStart(s_reconnectTimer, 0);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*)data;
         ESP_LOGI(TAG, "获取 IP: " IPSTR, IP2STR(&event->ip_info.ip));
         s_retryCount = 0;
+        WifiManager::connecting_ = false;
         WifiManager::setConnected(true);
         xEventGroupSetBits(s_wifiEventGroup, WIFI_CONNECTED_BIT);
+        if (s_reconnectTimer) xTimerStop(s_reconnectTimer, 0);
     }
 }
 
 bool WifiManager::init() {
     if (initialized_) return true;
 
-    // NVS 和网络接口已在 main.cc 中初始化, 此处不再重复调用
-    // (重复调用 esp_netif_init() 会触发 ESP_ERROR_CHECK 中断)
-
     s_wifiEventGroup = xEventGroupCreate();
-
-    // 创建 STA netif (事件循环已在 main.cc 创建)
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -76,11 +86,12 @@ bool WifiManager::init() {
 
 bool WifiManager::connect() {
     if (connected_) return true;
+    if (connecting_) return false;  // 防止重入
+    
+    connecting_ = true;
 
-    // 从 NVS "provision" 命名空间读取 WiFi 配置
     std::string ssid;
     std::string pass;
-
     nvs_handle_t handle;
     if (nvs_open(NVS_NAMESPACE_PROVISION, NVS_READONLY, &handle) == ESP_OK) {
         char buf[64] = {0};
@@ -92,14 +103,12 @@ bool WifiManager::connect() {
     }
 
     if (ssid.empty()) {
-        ESP_LOGE(TAG, "NVS 中未找到 WiFi 配置, 请先配网");
+        ESP_LOGE(TAG, "NVS 中未找到 WiFi 配置");
+        connecting_ = false;
         return false;
     }
 
-    // 清除上一次连接尝试遗留的事件位 (防止立即返回 FAIL)
     xEventGroupClearBits(s_wifiEventGroup, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
-    // 重置重试计数器 (上次失败后 s_retryCount 可能已达到上限)
-    s_retryCount = 0;
 
     wifi_config_t wifiCfg = {};
     strncpy((char*)wifiCfg.sta.ssid, ssid.c_str(), sizeof(wifiCfg.sta.ssid) - 1);
@@ -108,26 +117,22 @@ bool WifiManager::connect() {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifiCfg));
 
-    // 启动 WiFi 驱动 (首次调用触发 WIFI_EVENT_STA_START, 事件处理器自动 esp_wifi_connect)
-    // 已启动时返回 ESP_ERR_WIFI_STATE, 需手动触发连接
     esp_err_t startErr = esp_wifi_start();
     if (startErr == ESP_ERR_WIFI_STATE || startErr == ESP_ERR_INVALID_STATE) {
         esp_wifi_connect();
     } else if (startErr != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_start 失败: %s", esp_err_to_name(startErr));
+        connecting_ = false;
         return false;
     }
 
     ESP_LOGI(TAG, "连接 WiFi: %s", ssid.c_str());
 
-    // 等待连接 (最多 20 秒)
     EventBits_t bits = xEventGroupWaitBits(
-        s_wifiEventGroup,
-        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-        pdFALSE, pdFALSE,
-        pdMS_TO_TICKS(20000)
-    );
+        s_wifiEventGroup, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+        pdFALSE, pdFALSE, pdMS_TO_TICKS(20000));
 
+    connecting_ = false;
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "WiFi 已连接");
         return true;
@@ -138,15 +143,15 @@ bool WifiManager::connect() {
 }
 
 void WifiManager::ensureConnected() {
-    if (!connected_) {
+    if (!connected_ && !connecting_) {
         ESP_LOGI(TAG, "WiFi 断开, 重连...");
         connect();
     }
 }
 
-bool WifiManager::isConnected() {
-    return connected_;
-}
+bool WifiManager::isConnected() { return connected_; }
+
+void WifiManager::setConnected(bool c) { connected_ = c; }
 
 std::string WifiManager::getIP() {
     esp_netif_ip_info_t ipInfo;

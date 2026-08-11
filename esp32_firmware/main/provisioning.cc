@@ -619,7 +619,7 @@ bool Provisioning::startSoftAP() {
     strncpy((char*)apConfig.ap.ssid, ssid.c_str(), sizeof(apConfig.ap.ssid) - 1);
     apConfig.ap.ssid_len = ssid.length();
     apConfig.ap.channel = 6;
-    apConfig.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    apConfig.ap.authmode = WIFI_AUTH_OPEN;
     apConfig.ap.max_connection = 2;
     strncpy((char*)apConfig.ap.password, pin.c_str(), sizeof(apConfig.ap.password) - 1);
 

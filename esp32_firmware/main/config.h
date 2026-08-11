@@ -67,7 +67,7 @@
 #define DEFAULT_DEEP_SLEEP    0
 
 /* 固件版本 (用于上报服务器 + NVS版本检测, 变更时自动清除旧配网) */
-#define FIRMWARE_VERSION      "2.2.0"
+#define FIRMWARE_VERSION      "3.1.0"
 
 /* NVS 版本键 (用于检测固件升级, 自动清除旧配网数据) */
 #define NVS_KEY_FW_VERSION     "fw_ver"

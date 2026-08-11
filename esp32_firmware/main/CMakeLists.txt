@@ -17,6 +17,7 @@ idf_component_register(
           "retry_queue.cc"
           "security_bridge.cc"
           "provisioning.cc"
+          "command_server.cc"
     INCLUDE_DIRS "."
     REQUIRES bio_security
              esp_wifi
