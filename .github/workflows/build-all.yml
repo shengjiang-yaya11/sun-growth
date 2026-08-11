@@ -20,6 +20,8 @@ jobs:
     container: espressif/idf:v5.1.2
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory /__w/sun-growth/sun-growth
@@ -99,6 +101,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Go
         uses: actions/setup-go@v5

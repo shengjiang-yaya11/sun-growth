@@ -438,13 +438,13 @@ func (gs *guiState) buildDashboard() *container.Scroll {
 		ip := strings.TrimSpace(gs.esp32IPEntry.Text)
 		secret := strings.TrimSpace(gs.esp32SecretEntry.Text)
 		if ip == "" {
-			dialog.ShowInformation("远程拍照", "请先输入 ESP32 IP 地址", window)
+			dialog.ShowInformation("远程拍照", "请先输入 ESP32 IP 地址", gs.window)
 			return
 		}
 		if err := gs.serverApp.DevCtrl.CaptureNow(ip, 8081, secret); err != nil {
-			dialog.ShowError(fmt.Errorf("拍照失败: %v", err), window)
+			dialog.ShowError(fmt.Errorf("拍照失败: %v", err), gs.window)
 		} else {
-			dialog.ShowInformation("远程拍照", "拍照命令已发送, 照片将在数秒内到达", window)
+			dialog.ShowInformation("远程拍照", "拍照命令已发送, 照片将在数秒内到达", gs.window)
 		}
 	})
 	gs.esp32CaptureBtn.Disable()
@@ -478,9 +478,9 @@ func (gs *guiState) buildDashboard() *container.Scroll {
 				gs.esp32StatusBtn.Enable()
 				gs.esp32CaptureBtn.Enable()
 				dialog.ShowInformation("设备发现",
-					fmt.Sprintf("发现 %d 台设备:\n%s", len(devices), devices[0].IP), window)
+					fmt.Sprintf("发现 %d 台设备:\n%s", len(devices), devices[0].IP), gs.window)
 			} else {
-				dialog.ShowInformation("设备发现", "未发现 ESP32 设备\n请确认设备已连接同一WiFi", window)
+				dialog.ShowInformation("设备发现", "未发现 ESP32 设备\n请确认设备已连接同一WiFi", gs.window)
 			}
 			gs.esp32ScanBtn.SetText("🔍 扫描设备")
 			gs.esp32ScanBtn.Enable()
@@ -749,7 +749,7 @@ func (gs *guiState) buildSettings() *container.Scroll {
 			}
 			path := uri.Path()
 			saveFolderEntry.SetText(path)
-		}, window)
+		}, gs.window)
 		dlg.Show()
 	})
 
@@ -818,7 +818,7 @@ func (gs *guiState) buildSettings() *container.Scroll {
 		if saveFolder != "" {
 			cleanPath := filepath.Clean(saveFolder)
 			if err := os.MkdirAll(cleanPath, 0755); err != nil {
-				dialog.ShowError(fmt.Errorf("%v", err), window)
+				dialog.ShowError(fmt.Errorf("%v", err), gs.window)
 				return
 			}
 			cfg.CustomSaveDir = cleanPath
@@ -833,7 +833,7 @@ func (gs *guiState) buildSettings() *container.Scroll {
 
 		// 保存配置文件
 		if err := gs.serverApp.SaveConfig(); err != nil {
-			dialog.ShowError(fmt.Errorf("%v", err), window)
+			dialog.ShowError(fmt.Errorf("%v", err), gs.window)
 			return
 		}
 
@@ -876,7 +876,7 @@ func (gs *guiState) buildSettings() *container.Scroll {
 				}
 				// 先保存配置
 				if err := gs.serverApp.SaveConfig(); err != nil {
-					dialog.ShowError(fmt.Errorf("%v", err), window)
+					dialog.ShowError(fmt.Errorf("%v", err), gs.window)
 					return
 				}
 				slog.Info("正在重启服务器...")
@@ -887,7 +887,7 @@ func (gs *guiState) buildSettings() *container.Scroll {
 					if err := gs.serverApp.ReloadAndRestart(); err != nil {
 						slog.Error("服务器重启失败", "error", err)
 						dialog.ShowError(fmt.Errorf("%s: %v",
-							i18n.Translate(gs.currentLang, i18n.GuiStartFailed), err), window)
+							i18n.Translate(gs.currentLang, i18n.GuiStartFailed), err), gs.window)
 						gs.statusLabel.SetText(i18n.Translate(gs.currentLang, i18n.GuiStopped))
 						gs.updateToggleButton()
 						return
@@ -903,7 +903,7 @@ func (gs *guiState) buildSettings() *container.Scroll {
 					)
 					go gs.pollDeviceStatus()
 				}()
-			}, window)
+			}, gs.window)
 	})
 
 	// 修改管理员密码
@@ -912,17 +912,17 @@ func (gs *guiState) buildSettings() *container.Scroll {
 	changePasswordBtn := widget.NewButton(i18n.Translate(lang, i18n.GuiChangePassword), func() {
 		pwd := strings.TrimSpace(newPasswordEntry.Text)
 		if pwd == "" {
-			dialog.ShowError(fmt.Errorf("%s", i18n.Translate(gs.currentLang, i18n.GuiPasswordEmpty)), window)
+			dialog.ShowError(fmt.Errorf("%s", i18n.Translate(gs.currentLang, i18n.GuiPasswordEmpty)), gs.window)
 			return
 		}
 		hash, err := config.HashPassword(pwd)
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("%v", err), window)
+			dialog.ShowError(fmt.Errorf("%v", err), gs.window)
 			return
 		}
 		gs.serverApp.Cfg.AdminPasswordHash = hash
 		if err := gs.serverApp.SaveConfig(); err != nil {
-			dialog.ShowError(fmt.Errorf("%v", err), window)
+			dialog.ShowError(fmt.Errorf("%v", err), gs.window)
 			return
 		}
 		newPasswordEntry.SetText("")
