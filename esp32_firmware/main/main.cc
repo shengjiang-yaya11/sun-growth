@@ -139,30 +139,6 @@ void initLED() {
 
 // SNTP 时间同步 (用于签名时间戳)
 void initSNTP() {
-    CommandServer::start();
-    CommandServer::registerHandler("capture", [](const std::string&) -> std::string {
-        g_capturePending = true;
-        ESP_LOGI(TAG, "收到远程拍照命令");
-        return CommandServer::buildResponse("ok", "\"capture queued\"");
-    });
-    CommandServer::registerHandler("status", [](const std::string&) -> std::string {
-        std::string data = "{\"wifi_rssi\":0,\"uptime_sec\":0,\"fw_version\":\"" FIRMWARE_VERSION "\",\"free_heap\":";
-        data += std::to_string(esp_get_free_heap_size());
-        data += ",\"photo_count\":" + std::to_string(photoCount);
-        data += ",\"fail_count\":" + std::to_string(failCount);
-        data += "}";
-        return CommandServer::buildResponse("ok", data);
-    });
-    CommandServer::registerHandler("set_config", [](const std::string& params) -> std::string {
-        ESP_LOGI(TAG, "收到配置更新: %s", params.c_str());
-        return CommandServer::buildResponse("ok", "\"config updated\"");
-    });
-    CommandServer::registerHandler("restart", [](const std::string&) -> std::string {
-        ESP_LOGI(TAG, "收到重启命令");
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_restart();
-        return CommandServer::buildResponse("ok", "\"restarting\"");
-    });
     setenv("TZ", "UTC0", 1);
     tzset();
 
@@ -398,6 +374,8 @@ extern "C" void app_main() {
 
     // 14. NTP 时间同步
     initSNTP();
+
+    // v3.1: 启动命令服务器 (接收电脑端远程控制)
     CommandServer::start();
     CommandServer::registerHandler("capture", [](const std::string&) -> std::string {
         g_capturePending = true;
@@ -405,23 +383,26 @@ extern "C" void app_main() {
         return CommandServer::buildResponse("ok", "\"capture queued\"");
     });
     CommandServer::registerHandler("status", [](const std::string&) -> std::string {
-        std::string data = "{\"wifi_rssi\":0,\"uptime_sec\":0,\"fw_version\":\"" FIRMWARE_VERSION "\",\"free_heap\":";
-        data += std::to_string(esp_get_free_heap_size());
-        data += ",\"photo_count\":" + std::to_string(photoCount);
-        data += ",\"fail_count\":" + std::to_string(failCount);
-        data += "}";
-        return CommandServer::buildResponse("ok", data);
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "{\"wifi_rssi\":0,\"uptime_sec\":0,\"fw_version\":\"%s\",\"free_heap\":%u,\"photo_count\":%u,\"fail_count\":%u}",
+            FIRMWARE_VERSION,
+            (unsigned)esp_get_free_heap_size(),
+            (unsigned)photoCount,
+            (unsigned)failCount);
+        return CommandServer::buildResponse("ok", std::string(buf));
     });
     CommandServer::registerHandler("set_config", [](const std::string& params) -> std::string {
-        ESP_LOGI(TAG, "收到配置更新: %s", params.c_str());
+        ESP_LOGI(TAG, "收到配置更新");
         return CommandServer::buildResponse("ok", "\"config updated\"");
     });
     CommandServer::registerHandler("restart", [](const std::string&) -> std::string {
-        ESP_LOGI(TAG, "收到重启命令");
-        vTaskDelay(pdMS_TO_TICKS(500));
+        ESP_LOGI(TAG, "收到重启命令, 1秒后重启");
+        vTaskDelay(pdMS_TO_TICKS(1000));
         esp_restart();
         return CommandServer::buildResponse("ok", "\"restarting\"");
     });
+    ESP_LOGI(TAG, "命令服务器已启动 (端口 8081)");
 
     // 15. 打印初始内存状态
     logHeapStatus();
@@ -480,14 +461,14 @@ extern "C" void app_main() {
             checkFactoryReset();
         }
 
-        // 定时拍照
-
-        // v3.1: 远程拍照命令
+        // v3.1: 处理远程拍照命令
         if (g_capturePending) {
             g_capturePending = false;
             WifiManager::ensureConnected();
             captureAndUpload();
         }
+
+        // 定时拍照
         if ((now - lastCapture) >= interval) {
             lastCapture = now;
             WifiManager::ensureConnected();
