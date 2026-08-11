@@ -1,0 +1,30 @@
+# ============================================================
+#  ESP32 固件编译 Dockerfile
+#  使用 ESP-IDF 官方镜像编译固件为 bin 文件
+#  作者: Andrew 亚生
+# ============================================================
+FROM espressif/idf:v5.1.2
+
+WORKDIR /project
+
+# 复制固件源码
+COPY . /project/
+
+# 编译固件
+RUN . /opt/esp/idf/export.sh && \
+    idf.py set-target esp32s3 && \
+    idf.py build
+
+# 编译完成后, bin 文件位于:
+#   build/bio_growth_recorder.bin
+#   build/bootloader/bootloader.bin
+#   build/partition_table/partition-table.bin
+
+# 使用方法:
+#   cd esp32_firmware
+#   docker build -f Dockerfile.build -t bio-recorder-fw .
+#   docker create --name fw_temp bio-recorder-fw
+#   docker cp fw_temp:/project/build/bio_growth_recorder.bin ./bio-recorder-esp32s3-firmware.bin
+#   docker cp fw_temp:/project/build/bootloader/bootloader.bin ./bio-recorder-esp32s3-bootloader.bin
+#   docker cp fw_temp:/project/build/partition_table/partition-table.bin ./bio-recorder-esp32s3-partitions.bin
+#   docker rm fw_temp

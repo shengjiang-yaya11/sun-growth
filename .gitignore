@@ -1,0 +1,27 @@
+# Build output
+esp32_firmware/build/
+esp32_firmware/build_output/
+esp32_firmware/firmware_bin/
+storage_server/dist/*.exe
+storage_server/dist/*-darwin-*
+storage_server/dist/*-linux-*
+storage_server/dist/*-nas-*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+storage_server/vendor/
+
+# Data
+*.db
+captures/
+data/
+config.json

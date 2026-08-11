@@ -1,0 +1,12 @@
+# ============================================================
+#  【ESP32 端固件】烧录目标: ESP32-S3 CAM V1.1 开发板
+#  编译工具链: ESP-IDF v5.x + Xtensa gcc (不依赖电脑端软件)
+#  烧录方式: USB 连接开发板, 运行 idf.py flash
+# ============================================================
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+# 分区表: 适配 16MB Flash (devID 4017h = 128Mbit = 16MB)
+# factory 分区 3MB, 剩余空间预留 (后续 OTA 时添加 ota_0/ota_1/otadata)
+nvs,      data, nvs,     ,        0x4000,
+phy_init, data, phy,     ,        0x1000,
+factory,  app,  factory, ,        0x300000,
