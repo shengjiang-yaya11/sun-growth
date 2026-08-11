@@ -1,0 +1,189 @@
+name: Build All (Firmware + Desktop)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g. v3.1.0)'
+        required: true
+        default: 'v3.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  # ==================== ESP32 固件编译 ====================
+  build-firmware:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.1.2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ESP32 firmware
+        working-directory: esp32_firmware
+        run: |
+          . /opt/esp/idf/export.sh
+          idf.py set-target esp32s3
+          idf.py build
+
+      - name: Prepare firmware artifacts
+        run: |
+          mkdir -p firmware_bin
+          cp esp32_firmware/build/bio_growth_recorder.bin firmware_bin/sun-growth-esp32s3-firmware.bin
+          cp esp32_firmware/build/bootloader/bootloader.bin firmware_bin/sun-growth-esp32s3-bootloader.bin
+          cp esp32_firmware/build/partition_table/partition-table.bin firmware_bin/sun-growth-esp32s3-partitions.bin
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-firmware
+          path: firmware_bin/
+
+  # ==================== 桌面应用编译 ====================
+  build-desktop:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-gui-amd64
+            goarch: amd64
+            cgo: 1
+            ext: ""
+          - os: ubuntu-latest
+            name: linux-nas-amd64
+            goarch: amd64
+            cgo: 0
+            ext: ""
+            tags: headless
+          - os: ubuntu-latest
+            name: linux-nas-arm64
+            goarch: arm64
+            cgo: 0
+            ext: ""
+            tags: headless
+          - os: macos-latest
+            name: darwin-arm64
+            goarch: arm64
+            cgo: 1
+            ext: ""
+          - os: macos-13
+            name: darwin-amd64
+            goarch: amd64
+            cgo: 1
+            ext: ""
+          - os: windows-latest
+            name: windows-gui
+            goarch: amd64
+            cgo: 1
+            ext: ".exe"
+          - os: windows-latest
+            name: windows-headless
+            goarch: amd64
+            cgo: 0
+            ext: ".exe"
+            tags: headless
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install Linux GUI deps
+        if: runner.os == 'Linux' && matrix.cgo == 1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev gcc libc6-dev
+
+      - name: Build
+        working-directory: storage_server
+        env:
+          GOOS: ${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'darwin' || 'windows' }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: |
+          BUILD_TAGS="${{ matrix.tags }}"
+          OUTPUT="sun-growth-${{ matrix.name }}${{ matrix.ext }}"
+          go build -tags "${BUILD_TAGS}" -o "../dist/${OUTPUT}" .
+          echo "Built: dist/${OUTPUT}"
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sun-growth-${{ matrix.name }}
+          path: dist/
+
+  # ==================== 创建 Release ====================
+  create-release:
+    needs: [build-firmware, build-desktop]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Organize artifacts
+        run: |
+          mkdir -p release
+          # ESP32 firmware
+          cp artifacts/esp32-firmware/*.bin release/ 2>/dev/null || true
+          # Desktop apps
+          find artifacts -name "sun-growth-*" -type f | while read f; do
+            cp "$f" release/
+          done
+          ls -lh release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          name: "Sun Growth ${{ github.event.inputs.release_tag }}"
+          body: |
+            ## ☀️ Sun Growth ${{ github.event.inputs.release_tag }}
+
+            ### ESP32 固件 (烧录用)
+            - `sun-growth-esp32s3-firmware.bin` — 主固件 (0x10000)
+            - `sun-growth-esp32s3-bootloader.bin` — 引导加载器 (0x0)
+            - `sun-growth-esp32s3-partitions.bin` — 分区表 (0x8000)
+
+            ### 桌面应用
+            | 文件 | 平台 |
+            |------|------|
+            | `sun-growth-darwin-arm64` | macOS Apple Silicon |
+            | `sun-growth-darwin-amd64` | macOS Intel |
+            | `sun-growth-windows-gui.exe` | Windows GUI |
+            | `sun-growth-windows-headless.exe` | Windows Headless |
+            | `sun-growth-linux-gui-amd64` | Linux GUI |
+            | `sun-growth-linux-nas-amd64` | Linux NAS (x64) |
+            | `sun-growth-linux-nas-arm64` | Linux NAS (ARM64) |
+
+            ### 烧录命令
+            ```bash
+            esptool.py --chip esp32s3 --port /dev/ttyUSB0 --baud 921600 \
+              write_flash \
+              0x0 sun-growth-esp32s3-bootloader.bin \
+              0x8000 sun-growth-esp32s3-partitions.bin \
+              0x10000 sun-growth-esp32s3-firmware.bin
+            ```
+
+            ### 桌面端运行
+            ```bash
+            # macOS
+            xattr -cr sun-growth-darwin-arm64 && ./sun-growth-darwin-arm64
+
+            # Windows
+            sun-growth-windows-gui.exe
+
+            # Headless (命令行/NAS/Docker)
+            ./sun-growth-linux-nas-amd64 --headless
+            ```
+          files: release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: false
