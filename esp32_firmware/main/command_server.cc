@@ -8,6 +8,7 @@
 #include "config.h"
 #include "security_bridge.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
