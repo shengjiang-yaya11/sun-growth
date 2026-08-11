@@ -27,6 +27,7 @@ public:
 
     /// 设置连接状态 (事件处理器回调用)
     static void setConnected(bool v) { connected_ = v; }
+    static void setConnecting(bool v) { connecting_ = v; }
 
     /// 获取 IP 地址
     static std::string getIP();

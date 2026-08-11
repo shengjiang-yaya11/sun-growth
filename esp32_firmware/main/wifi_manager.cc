@@ -26,7 +26,7 @@ static int s_retryCount = 0;
 static TimerHandle_t s_reconnectTimer = nullptr;
 
 static void reconnectTimerCB(TimerHandle_t) {
-    WifiManager::connecting_ = false;
+    WifiManager::setConnecting(false);
     WifiManager::connect();
 }
 
@@ -37,7 +37,7 @@ static void wifiEventHandler(void* arg, esp_event_base_t base,
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t* ev = (wifi_event_sta_disconnected_t*)data;
         WifiManager::setConnected(false);
-        WifiManager::connecting_ = false;
+        WifiManager::setConnecting(false);
         ESP_LOGW(TAG, "WiFi 断开 (reason=%d), 重试 #%d", ev->reason, s_retryCount + 1);
         
         // 指数退避: 1s, 2s, 4s, 8s, 16s, 32s, 60s (max)
@@ -57,7 +57,7 @@ static void wifiEventHandler(void* arg, esp_event_base_t base,
         ip_event_got_ip_t* event = (ip_event_got_ip_t*)data;
         ESP_LOGI(TAG, "获取 IP: " IPSTR, IP2STR(&event->ip_info.ip));
         s_retryCount = 0;
-        WifiManager::connecting_ = false;
+        WifiManager::setConnecting(false);
         WifiManager::setConnected(true);
         xEventGroupSetBits(s_wifiEventGroup, WIFI_CONNECTED_BIT);
         if (s_reconnectTimer) xTimerStop(s_reconnectTimer, 0);
@@ -86,7 +86,7 @@ bool WifiManager::init() {
 
 bool WifiManager::connect() {
     if (connected_) return true;
-    if (connecting_) return false;  // 防止重入
+    if (WifiManager::connecting_) return false;  // 防止重入
     
     connecting_ = true;
 
@@ -151,7 +151,6 @@ void WifiManager::ensureConnected() {
 
 bool WifiManager::isConnected() { return connected_; }
 
-void WifiManager::setConnected(bool c) { connected_ = c; }
 
 std::string WifiManager::getIP() {
     esp_netif_ip_info_t ipInfo;
