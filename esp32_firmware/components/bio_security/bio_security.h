@@ -77,6 +77,22 @@ int bio_encrypt(const uint8_t *plaintext, size_t pt_len,
 void bio_sha256(const uint8_t *data, size_t len, uint8_t *out_32);
 
 /*
+ * 计算 HMAC-SHA256
+ *
+ * 参数:
+ *   key       - HMAC 密钥 (不可为 NULL)
+ *   key_len   - 密钥长度
+ *   data      - 输入数据 (不可为 NULL, len 可为 0)
+ *   data_len  - 数据长度
+ *   out_32    - 输出 32 字节 HMAC (不可为 NULL)
+ *
+ * 返回: 0 = 成功, 非 0 = 失败
+ */
+int bio_hmac_sha256(const uint8_t *key, size_t key_len,
+                    const uint8_t *data, size_t data_len,
+                    uint8_t *out_32);
+
+/*
  * 生成请求签名 (HMAC-SHA256)
  *
  * 签名 = HMAC(secret, device_id || \0 || timestamp || \0 || nonce || \0 || payload_hash)

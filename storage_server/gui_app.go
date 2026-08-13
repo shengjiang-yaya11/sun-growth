@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -153,7 +154,9 @@ type guiState struct {
 	esp32SecretEntry *widget.Entry
 	esp32ScanBtn     *widget.Button
 	esp32CaptureBtn  *widget.Button
+	esp32ScheduleBtn *widget.Button
 	esp32StatusBtn   *widget.Button
+	esp32DelayEntry  *widget.Entry
 	esp32RSSILabel   *widget.Label
 	esp32HeapLabel   *widget.Label
 
@@ -433,73 +436,124 @@ func (gs *guiState) buildDashboard() *container.Scroll {
 	gs.esp32IPEntry.SetPlaceHolder("ESP32 IP (192.168.x.x)")
 	gs.esp32SecretEntry = widget.NewPasswordEntry()
 	gs.esp32SecretEntry.SetPlaceHolder("设备密钥 (64位十六进制)")
+	if devices, err := gs.serverApp.DB.ListDevices(); err == nil && len(devices) > 0 {
+		gs.esp32SecretEntry.SetText(devices[0].SecretHex)
+	}
+	gs.esp32DelayEntry = widget.NewEntry()
+	gs.esp32DelayEntry.SetPlaceHolder("30")
 
-	gs.esp32CaptureBtn = widget.NewButton("📷 远程拍照", func() {
+	doCapture := func() {
 		ip := strings.TrimSpace(gs.esp32IPEntry.Text)
 		secret := strings.TrimSpace(gs.esp32SecretEntry.Text)
 		if ip == "" {
-			dialog.ShowInformation("远程拍照", "请先输入 ESP32 IP 地址", gs.window)
+			dialog.ShowInformation(i18n.Translate(gs.currentLang, i18n.GuiCaptureSent),
+				i18n.Translate(gs.currentLang, i18n.GuiIPRequired), gs.window)
+			return
+		}
+		if secret == "" {
+			dialog.ShowInformation(i18n.Translate(gs.currentLang, i18n.GuiCaptureSent),
+				i18n.Translate(gs.currentLang, i18n.GuiSecretRequired), gs.window)
 			return
 		}
 		if err := gs.serverApp.DevCtrl.CaptureNow(ip, 8081, secret); err != nil {
-			dialog.ShowError(fmt.Errorf("拍照失败: %v", err), gs.window)
+			dialog.ShowError(fmt.Errorf("%s: %v", i18n.Translate(gs.currentLang, i18n.GuiCaptureFailed), err), gs.window)
 		} else {
-			dialog.ShowInformation("远程拍照", "拍照命令已发送, 照片将在数秒内到达", gs.window)
+			dialog.ShowInformation(i18n.Translate(gs.currentLang, i18n.GuiCaptureSent),
+				i18n.Translate(gs.currentLang, i18n.GuiCaptureQueued), gs.window)
 		}
+	}
+
+	gs.esp32CaptureBtn = widget.NewButton(i18n.Translate(lang, i18n.GuiRemoteCapture), func() {
+		doCapture()
 	})
 	gs.esp32CaptureBtn.Disable()
 
-	gs.esp32StatusBtn = widget.NewButton("📊 刷新状态", func() {
+	gs.esp32ScheduleBtn = widget.NewButton(i18n.Translate(lang, i18n.GuiCaptureOnce), func() {
 		ip := strings.TrimSpace(gs.esp32IPEntry.Text)
-		if ip == "" { return }
+		secret := strings.TrimSpace(gs.esp32SecretEntry.Text)
+		if ip == "" {
+			dialog.ShowInformation(i18n.Translate(gs.currentLang, i18n.GuiCaptureSent),
+				i18n.Translate(gs.currentLang, i18n.GuiIPRequired), gs.window)
+			return
+		}
+		if secret == "" {
+			dialog.ShowInformation(i18n.Translate(gs.currentLang, i18n.GuiCaptureSent),
+				i18n.Translate(gs.currentLang, i18n.GuiSecretRequired), gs.window)
+			return
+		}
+		delaySec, err := strconv.Atoi(strings.TrimSpace(gs.esp32DelayEntry.Text))
+		if err != nil || delaySec < 1 || delaySec > 86400 {
+			dialog.ShowInformation(i18n.Translate(gs.currentLang, i18n.GuiScheduleCapture),
+				i18n.Translate(gs.currentLang, i18n.GuiScheduleInvalid), gs.window)
+			return
+		}
+		gs.esp32ScheduleBtn.Disable()
+		go func() {
+			time.Sleep(time.Duration(delaySec) * time.Second)
+			gs.esp32ScheduleBtn.Enable()
+			doCapture()
+		}()
+		dialog.ShowInformation(i18n.Translate(gs.currentLang, i18n.GuiScheduled),
+			fmt.Sprintf("%s: %d s", i18n.Translate(gs.currentLang, i18n.GuiScheduleCapture), delaySec), gs.window)
+	})
+	gs.esp32ScheduleBtn.Disable()
+
+	gs.esp32StatusBtn = widget.NewButton(i18n.Translate(lang, i18n.GuiRefreshStatus), func() {
+		ip := strings.TrimSpace(gs.esp32IPEntry.Text)
+		if ip == "" {
+			return
+		}
 		status, err := gs.serverApp.DevCtrl.GetDeviceStatus(ip, 8081)
 		if err != nil {
-			gs.esp32RSSILabel.SetText("离线或无法连接")
+			gs.esp32RSSILabel.SetText(i18n.Translate(gs.currentLang, i18n.GuiOfflineUnreachable))
 			gs.esp32HeapLabel.SetText("")
 			return
 		}
-		gs.esp32RSSILabel.SetText(fmt.Sprintf("信号: %d dBm | 运行: %ds | 固件: %s",
+		gs.esp32RSSILabel.SetText(fmt.Sprintf(i18n.Translate(gs.currentLang, i18n.GuiSignal),
 			status.WiFiRSSI, status.UptimeSec, status.FWVersion))
-		gs.esp32HeapLabel.SetText(fmt.Sprintf("空闲内存: %d KB", status.FreeHeap/1024))
+		gs.esp32HeapLabel.SetText(fmt.Sprintf(i18n.Translate(gs.currentLang, i18n.GuiFreeHeap), status.FreeHeap/1024))
 		gs.esp32CaptureBtn.Enable()
+		gs.esp32ScheduleBtn.Enable()
 	})
 	gs.esp32StatusBtn.Disable()
 
-	gs.esp32RSSILabel = widget.NewLabel("未连接")
+	gs.esp32RSSILabel = widget.NewLabel(i18n.Translate(lang, i18n.GuiNotConnected))
 	gs.esp32HeapLabel = widget.NewLabel("")
 
-	gs.esp32ScanBtn = widget.NewButton("🔍 扫描设备", func() {
+	gs.esp32ScanBtn = widget.NewButton(i18n.Translate(lang, i18n.GuiScanDevices), func() {
 		gs.esp32ScanBtn.Disable()
-		gs.esp32ScanBtn.SetText("扫描中...")
+		gs.esp32ScanBtn.SetText(i18n.Translate(gs.currentLang, i18n.GuiDiscovering))
 		go func() {
 			devices := gs.serverApp.DevCtrl.DiscoverDevices()
 			if len(devices) > 0 {
 				gs.esp32IPEntry.SetText(devices[0].IP)
 				gs.esp32StatusBtn.Enable()
 				gs.esp32CaptureBtn.Enable()
-				dialog.ShowInformation("设备发现",
-					fmt.Sprintf("发现 %d 台设备:\n%s", len(devices), devices[0].IP), gs.window)
+				gs.esp32ScheduleBtn.Enable()
+				dialog.ShowInformation(i18n.Translate(gs.currentLang, i18n.GuiESP32Control),
+					fmt.Sprintf(i18n.Translate(gs.currentLang, i18n.GuiDevicesFound), len(devices), devices[0].IP), gs.window)
 			} else {
-				dialog.ShowInformation("设备发现", "未发现 ESP32 设备\n请确认设备已连接同一WiFi", gs.window)
+				dialog.ShowInformation(i18n.Translate(gs.currentLang, i18n.GuiESP32Control),
+					i18n.Translate(gs.currentLang, i18n.GuiNoDevicesFound), gs.window)
 			}
-			gs.esp32ScanBtn.SetText("🔍 扫描设备")
+			gs.esp32ScanBtn.SetText(i18n.Translate(gs.currentLang, i18n.GuiScanDevices))
 			gs.esp32ScanBtn.Enable()
 		}()
 	})
 
-	esp32ControlCard := widget.NewCard("📡 ESP32 远程控制", "",
+	esp32ControlCard := widget.NewCard(i18n.Translate(lang, i18n.GuiESP32Control), "",
 		container.NewVBox(
 			gs.esp32ScanBtn,
-			widget.NewLabel("设备 IP:"),
+			widget.NewLabel(i18n.Translate(lang, i18n.GuiDeviceIP)),
 			gs.esp32IPEntry,
-			widget.NewLabel("设备密钥:"),
+			widget.NewLabel(i18n.Translate(lang, i18n.GuiDeviceSecretLabel)),
 			gs.esp32SecretEntry,
-			container.NewHBox(gs.esp32CaptureBtn, gs.esp32StatusBtn),
+			container.NewHBox(gs.esp32CaptureBtn, gs.esp32ScheduleBtn, gs.esp32StatusBtn),
+			container.NewHBox(widget.NewLabel(i18n.Translate(lang, i18n.GuiDelaySeconds)), gs.esp32DelayEntry),
 			gs.esp32RSSILabel,
 			gs.esp32HeapLabel,
 		),
 	)
-
 
 	// 操作按钮行 (单按钮切换 + 画廊)
 	buttonRow := container.NewHBox(gs.toggleBtn, gs.galleryBtn)
@@ -821,8 +875,10 @@ func (gs *guiState) buildSettings() *container.Scroll {
 				dialog.ShowError(fmt.Errorf("%v", err), gs.window)
 				return
 			}
-			cfg.CustomSaveDir = cleanPath
-			cfg.DataDir = cleanPath
+			if err := gs.serverApp.SetDataDir(cleanPath); err != nil {
+				dialog.ShowError(fmt.Errorf("%v", err), gs.window)
+				return
+			}
 		}
 
 		// 更新配置
@@ -845,6 +901,21 @@ func (gs *guiState) buildSettings() *container.Scroll {
 		} else if len(devices) > 0 {
 			if err := gs.serverApp.DB.UpdatePhotoInterval(devices[0].DeviceID, totalSeconds); err != nil {
 				slog.Warn("更新拍照间隔失败", "error", err)
+			}
+		}
+
+		// 电脑端作为控制中心：把拍照间隔同步到 ESP32 设备。
+		ip := strings.TrimSpace(gs.esp32IPEntry.Text)
+		secret := strings.TrimSpace(gs.esp32SecretEntry.Text)
+		if ip != "" {
+			if secret == "" {
+				slog.Warn("拍照间隔未下发: 请先在远程控制面板填写设备密钥")
+				dialog.ShowError(fmt.Errorf("%s", i18n.Translate(gs.currentLang, i18n.GuiSecretRequired)), gs.window)
+			} else if err := gs.serverApp.DevCtrl.SetInterval(ip, 8081, totalSeconds, secret); err != nil {
+				slog.Warn("拍照间隔下发失败", "device", ip, "error", err)
+				dialog.ShowError(fmt.Errorf("%s: %v", i18n.Translate(gs.currentLang, i18n.GuiIntervalSendFailed), err), gs.window)
+			} else {
+				slog.Info("拍照间隔已下发", "device", ip, "interval_sec", totalSeconds)
 			}
 		}
 
@@ -1015,54 +1086,35 @@ func (gs *guiState) refreshUILanguage() {
 		gs.tabs.Refresh()
 	}
 
-	// 更新仪表盘按钮文本 (单按钮切换)
-	gs.updateToggleButton()
-	if gs.galleryBtn != nil {
-		gs.galleryBtn.SetText(i18n.Translate(lang, i18n.GuiOpenGallery))
+	// 重建仪表盘，让 ESP32 远程控制面板等所有文本同时切换语言。
+	if gs.dashContainer != nil {
+		gs.dashContainer.Content = gs.buildDashboard()
+		gs.dashContainer.Refresh()
 	}
 
-	// 更新状态标签
-	if gs.statusLabel != nil {
-		if gs.serverApp.Running {
-			gs.statusLabel.SetText(i18n.Translate(lang, i18n.GuiRunning))
-		} else {
-			gs.statusLabel.SetText(i18n.Translate(lang, i18n.GuiStopped))
-		}
-	}
-
-	// 更新卡片标题
-	if gs.statusCard != nil {
-		gs.statusCard.SetTitle(i18n.Translate(lang, i18n.GuiServerStatus))
-	}
-	if gs.deviceCard != nil {
-		gs.deviceCard.SetTitle(i18n.Translate(lang, i18n.GuiDeviceStatus))
-	}
-	if gs.esp32Card != nil {
-		gs.esp32Card.SetTitle(i18n.Translate(lang, i18n.GuiESP32Setup))
-	}
-	if gs.esp32StatusLabel != nil {
-		if gs.serverApp.Running {
-			gs.esp32StatusLabel.SetText(i18n.Translate(lang, i18n.GuiWaitingESP32))
-		} else {
-			gs.esp32StatusLabel.SetText(i18n.Translate(lang, i18n.GuiNoDevicesYet))
-		}
-	}
-
-	// 刷新设备表格 (表头需要更新语言)
-	if gs.deviceTable != nil {
-		gs.deviceTable.Refresh()
-	}
-
-	// 重建设置页 (因为 Fyne 的 Card/Label 不支持动态修改标题)
+	// 重建设置页 (Fyne Card/Label 不支持动态修改标题)。
 	gs.settingsContent = gs.buildSettings()
 
-	// 替换设置标签页内容
 	if gs.tabs != nil && gs.tabs.Items != nil && len(gs.tabs.Items) >= 2 {
+		gs.tabs.Items[0].Content = gs.dashContainer
 		gs.tabs.Items[1].Content = gs.settingsContent
 		gs.tabs.Refresh()
 	}
 
-	// 保存语言到配置
+	// 重建后刷新运行状态和按钮文本。
+	gs.updateToggleButton()
+	if gs.galleryBtn != nil {
+		gs.galleryBtn.SetText(i18n.Translate(lang, i18n.GuiOpenGallery))
+	}
+	if gs.serverApp.Running {
+		gs.statusLabel.SetText(i18n.Translate(lang, i18n.GuiRunning))
+		gs.urlLabel.SetText(gs.serverApp.ServerURL())
+		go gs.updateDashboard()
+	} else {
+		gs.statusLabel.SetText(i18n.Translate(lang, i18n.GuiStopped))
+	}
+
+	// 保存语言到配置。
 	gs.serverApp.Cfg.DefaultLang = lang
 	_ = gs.serverApp.SaveConfig()
 }

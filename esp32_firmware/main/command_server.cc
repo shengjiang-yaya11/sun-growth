@@ -20,6 +20,8 @@
 
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <map>
 #include <mutex>
 
@@ -105,82 +107,88 @@ std::string handleRestart(const std::string& params) {
 
 // ==================== 签名验证 ====================
 
-bool CommandServer::verifySignature(const std::string& body) {
-    // 从请求体解析签名头: {"cmd":"xxx","params":{...},"sig":"base64sig","ts":"123"}
-    // 验证 HMAC(deviceSecret, cmd || params || ts) == sig
-    // 简化实现: 与 uploader 安全机制一致
-    
-    // 提取 sig 和 ts 字段
-    const char* p = body.c_str();
-    const char* sigPos = strstr(p, "\"sig\"");
-    const char* tsPos = strstr(p, "\"ts\"");
-    if (!sigPos || !tsPos) return false;
+namespace {
 
-    // 提取签名字符串 (base64)
-    sigPos = strchr(sigPos, '"');
-    if (!sigPos) return false;
-    sigPos++; // skip first "
-    sigPos = strchr(sigPos, '"');
-    if (!sigPos) return false;
-    sigPos++;
-    const char* sigEnd = strchr(sigPos, '"');
-    if (!sigEnd) return false;
-    std::string sigB64(sigPos, sigEnd - sigPos);
+bool extractJsonString(const std::string& json, const char* key, std::string& out) {
+    std::string needle = std::string("\"") + key + "\"";
+    size_t keyPos = json.find(needle);
+    if (keyPos == std::string::npos) return false;
 
-    // 提取时间戳
-    tsPos = strchr(tsPos, ':');
-    if (!tsPos) return false;
-    tsPos++;
-    while (*tsPos == ' ' || *tsPos == '"') tsPos++;
-    int64_t ts = atoll(tsPos);
+    size_t colon = json.find(':', keyPos + needle.size());
+    if (colon == std::string::npos) return false;
+
+    size_t open = json.find('"', colon + 1);
+    if (open == std::string::npos) return false;
+    size_t close = json.find('"', open + 1);
+    if (close == std::string::npos) return false;
+    out = json.substr(open + 1, close - open - 1);
+    return true;
+}
+
+bool extractJsonObject(const std::string& json, const char* key, std::string& out) {
+    std::string needle = std::string("\"") + key + "\"";
+    size_t keyPos = json.find(needle);
+    if (keyPos == std::string::npos) return false;
+
+    size_t colon = json.find(':', keyPos + needle.size());
+    if (colon == std::string::npos) return false;
+
+    size_t open = json.find('{', colon + 1);
+    if (open == std::string::npos) return false;
+
+    int depth = 1;
+    size_t pos = open + 1;
+    while (pos < json.size() && depth > 0) {
+        if (json[pos] == '{') depth++;
+        else if (json[pos] == '}') depth--;
+        pos++;
+    }
+    if (depth != 0) return false;
+    out = json.substr(open, pos - open);
+    return true;
+}
+
+bool extractJsonInt64(const std::string& json, const char* key, int64_t& out) {
+    std::string needle = std::string("\"") + key + "\"";
+    size_t keyPos = json.find(needle);
+    if (keyPos == std::string::npos) return false;
+
+    size_t colon = json.find(':', keyPos + needle.size());
+    if (colon == std::string::npos) return false;
+
+    size_t pos = colon + 1;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '"')) pos++;
+    char* end = nullptr;
+    out = (int64_t)strtoll(json.c_str() + pos, &end, 10);
+    return end != json.c_str() + pos;
+}
+
+} // namespace
+
+bool CommandServer::verifySignature(const std::string& cmd,
+                                    const std::string& params,
+                                    const std::string& body) {
+    // PC 端签名算法: signing_key = HMAC(secret, "bio-cmd-sig-v1")
+    //               sig = HMAC(signing_key, cmd || params_json || ts)
+    std::string sigB64;
+    int64_t ts = 0;
+    if (!extractJsonString(body, "sig", sigB64) ||
+        !extractJsonInt64(body, "ts", ts)) {
+        ESP_LOGW(TAG, "命令缺少签名或时间戳");
+        return false;
+    }
 
     // 防重放: 时间戳在 5 分钟内
     int64_t now = (int64_t)time(nullptr);
     if (now < 1700000000) now = 1700000000 + (esp_timer_get_time() / 1000000);
-    if (now - ts > 300 || ts - now > 300) return false;
-
-    // 重建签名: cmd + params + ts (去掉 sig 字段后重建)
-    std::string signPayload;
-    const char* q = body.c_str();
-    // 找 "cmd"
-    const char* cmdStart = strstr(q, "\"cmd\"");
-    if (cmdStart) {
-        cmdStart = strchr(cmdStart, '"');
-        if (cmdStart) {
-            cmdStart++;
-            cmdStart = strchr(cmdStart, '"');
-            if (cmdStart) cmdStart++;
-            const char* cmdEnd = strchr(cmdStart, '"');
-            if (cmdEnd) signPayload.append(cmdStart, cmdEnd - cmdStart);
-        }
+    if (now - ts > 300 || ts - now > 300) {
+        ESP_LOGW(TAG, "命令时间戳超出容差");
+        return false;
     }
-    // 找 "params":{...}
-    const char* paramsStart = strstr(q, "\"params\"");
-    if (paramsStart) {
-        paramsStart = strchr(paramsStart, '{');
-        if (paramsStart) {
-            const char* paramsEnd = strchr(paramsStart, '}');
-            if (paramsEnd) {
-                // 找配对的 }
-                int depth = 1;
-                const char* c = paramsStart + 1;
-                while (*c && depth > 0) {
-                    if (*c == '{') depth++;
-                    else if (*c == '}') depth--;
-                    c++;
-                }
-                signPayload.append(paramsStart, c - paramsStart);
-            }
-        }
-    }
-    signPayload += std::to_string(ts);
 
-    // 使用 SecurityBridge 验证
-    uint8_t payloadHash[SECURITY_HASH_LEN];
-    SecurityBridge::sha256((const uint8_t*)signPayload.c_str(), signPayload.size(), payloadHash);
-    std::string hashB64 = SecurityBridge::base64Encode(payloadHash, 32);
-
-    if (hashB64 != sigB64) {
+    std::string signPayload = cmd + params + std::to_string(ts);
+    std::string expected = SecurityBridge::commandSignatureBase64(signPayload);
+    if (expected.empty() || expected != sigB64) {
         ESP_LOGW(TAG, "命令签名验证失败");
         return false;
     }
@@ -190,41 +198,21 @@ bool CommandServer::verifySignature(const std::string& body) {
 // ==================== 命令处理 ====================
 
 std::string CommandServer::processCommand(const std::string& requestJson) {
-    // 验证签名
-    if (!verifySignature(requestJson)) {
-        return buildResponse("error", "{\"msg\":\"signature verification failed\"}");
-    }
-
     // 提取 cmd 字段
-    const char* p = requestJson.c_str();
-    const char* cmdStart = strstr(p, "\"cmd\"");
-    if (!cmdStart) {
+    std::string cmd;
+    if (!extractJsonString(requestJson, "cmd", cmd)) {
         return buildResponse("error", "{\"msg\":\"missing cmd field\"}");
     }
-    cmdStart = strchr(cmdStart, '"');
-    if (!cmdStart) return buildResponse("error", "{\"msg\":\"invalid json\"}");
-    cmdStart++;
-    cmdStart = strchr(cmdStart, '"');
-    if (!cmdStart) return buildResponse("error", "{\"msg\":\"invalid json\"}");
-    cmdStart++;
-    const char* cmdEnd = strchr(cmdStart, '"');
-    if (!cmdEnd) return buildResponse("error", "{\"msg\":\"invalid json\"}");
 
-    std::string cmd(cmdStart, cmdEnd - cmdStart);
-
-    // 提取 params 字段
+    // 提取 params 字段 (缺省按空对象处理，与电脑端签名内容一致)
     std::string params = "{}";
-    const char* paramsStart = strstr(p, "\"params\"");
-    if (paramsStart) {
-        paramsStart = strchr(paramsStart, '{');
-        if (paramsStart) {
-            const char* paramsEnd = paramsStart;
-            int depth = 1;
-            while (*++paramsEnd && depth > 0) {
-                if (*paramsEnd == '{') depth++;
-                else if (*paramsEnd == '}') depth--;
-            }
-            params = std::string(paramsStart, paramsEnd - paramsStart + 1);
+    extractJsonObject(requestJson, "params", params);
+
+    // status 仅用于局域网设备发现和状态查看，允许不签名；
+    // 其它控制命令必须通过 HMAC 签名验证。
+    if (cmd != "status") {
+        if (!verifySignature(cmd, params, requestJson)) {
+            return buildResponse("error", "{\"msg\":\"signature verification failed\"}");
         }
     }
 
@@ -242,11 +230,6 @@ std::string CommandServer::processCommand(const std::string& requestJson) {
     if (cmd == "restart")    return handleRestart(params);
 
     return buildResponse("error", "{\"msg\":\"unknown command: " + cmd + "\"}");
-}
-
-std::string CommandServer::buildResponse(const std::string& status,
-                                          const std::string& data) {
-    return "{\"status\":\"" + status + "\",\"data\":" + data + "}\n";
 }
 
 // ==================== TCP 服务器 ====================

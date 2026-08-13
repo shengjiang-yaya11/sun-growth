@@ -53,5 +53,7 @@ public:
 private:
     static void serverTask(void* arg);
     static std::string processCommand(const std::string& requestJson);
-    static bool verifySignature(const std::string& body);
+    static bool verifySignature(const std::string& cmd,
+                                const std::string& params,
+                                const std::string& body);
 };

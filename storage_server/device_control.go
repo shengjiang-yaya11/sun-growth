@@ -33,19 +33,19 @@ import (
 
 // DeviceController ESP32 设备控制器
 type DeviceController struct {
-	mu        sync.Mutex
-	devices   map[string]*ESP32Device // deviceID -> device
+	mu         sync.Mutex
+	devices    map[string]*ESP32Device // deviceID -> device
 	tcpTimeout time.Duration
 }
 
 // ESP32Device 已发现的 ESP32 设备
 type ESP32Device struct {
-	DeviceID        string `json:"device_id"`
-	IP              string `json:"ip"`
-	Port            int    `json:"port"`
-	FirmwareVersion string `json:"fw_version"`
+	DeviceID        string    `json:"device_id"`
+	IP              string    `json:"ip"`
+	Port            int       `json:"port"`
+	FirmwareVersion string    `json:"fw_version"`
 	LastSeen        time.Time `json:"last_seen"`
-	Online          bool   `json:"online"`
+	Online          bool      `json:"online"`
 }
 
 // DeviceStatus ESP32 设备状态 (从命令响应获取)
@@ -60,7 +60,7 @@ type DeviceStatus struct {
 // CommandRequest 发送给 ESP32 的命令
 type CommandRequest struct {
 	Cmd    string      `json:"cmd"`
-	Params interface{} `json:"params,omitempty"`
+	Params interface{} `json:"params"`
 	TS     int64       `json:"ts"`  // 时间戳
 	Sig    string      `json:"sig"` // HMAC 签名
 }
@@ -92,8 +92,8 @@ func (dc *DeviceController) DiscoverDevices() []ESP32Device {
 
 	// 对每个网段 /24 扫描 8081 端口
 	type result struct {
-		ip   string
-		dev  *ESP32Device
+		ip  string
+		dev *ESP32Device
 	}
 	results := make(chan result, 256)
 
@@ -127,22 +127,40 @@ func (dc *DeviceController) DiscoverDevices() []ESP32Device {
 		close(done)
 	}()
 
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-	}
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
 
-	// 收集结果
-	close(results)
-	for r := range results {
-		if r.dev != nil {
-			dc.devices[r.dev.DeviceID] = r.dev
-			discovered = append(discovered, *r.dev)
+	collect := func() {
+		for {
+			select {
+			case r := <-results:
+				if r.dev != nil {
+					dc.devices[r.dev.DeviceID] = r.dev
+					discovered = append(discovered, *r.dev)
+				}
+			default:
+				return
+			}
 		}
 	}
 
-	slog.Info("设备发现完成", "found", len(discovered))
-	return discovered
+	for {
+		select {
+		case r := <-results:
+			if r.dev != nil {
+				dc.devices[r.dev.DeviceID] = r.dev
+				discovered = append(discovered, *r.dev)
+			}
+		case <-done:
+			collect()
+			slog.Info("设备发现完成", "found", len(discovered))
+			return discovered
+		case <-timeout.C:
+			collect()
+			slog.Info("设备发现完成(超时)", "found", len(discovered))
+			return discovered
+		}
+	}
 }
 
 // probeDevice 探测单个设备
@@ -207,9 +225,17 @@ func (dc *DeviceController) SendCommand(deviceIP string, port int,
 		paramsJSON = string(b)
 	}
 
+	// 保证 params 字段始终存在且为对象，避免固件端重建签名时因缺失字段不一致
+	if params == nil {
+		params = map[string]interface{}{}
+	}
+
 	// 计算签名: HMAC(secret, cmd || paramsJSON || ts)
 	signPayload := cmd + paramsJSON + strconv.FormatInt(ts, 10)
-	sig := dc.computeSignature(secretHex, signPayload)
+	var sig string
+	if secretHex != "" {
+		sig = dc.computeSignature(secretHex, signPayload)
+	}
 
 	req := CommandRequest{
 		Cmd:    cmd,

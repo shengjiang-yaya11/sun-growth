@@ -43,6 +43,10 @@ public:
                                    const std::string& nonce,
                                    const uint8_t payloadHash[32]);
 
+    /// 生成电脑端命令签名
+    /// sig = HMAC(HMAC(device_secret, "bio-cmd-sig-v1"), cmd || params || ts)
+    static std::string commandSignatureBase64(const std::string& payload);
+
     /// Base64 编码
     static std::string base64Encode(const uint8_t* data, size_t len);
 

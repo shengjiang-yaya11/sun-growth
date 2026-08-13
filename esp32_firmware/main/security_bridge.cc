@@ -176,6 +176,34 @@ std::string SecurityBridge::signRequest(
     return base64Encode(sig, sigLen);
 }
 
+std::string SecurityBridge::commandSignatureBase64(const std::string& payload) {
+    // 安全检查: 密钥未加载时拒绝签名
+    if (!valid_) {
+        ESP_LOGE(TAG, "命令签名拒绝: 安全模块未初始化");
+        return "";
+    }
+
+    // 与电脑端一致: signing_key = HMAC(secret, "bio-cmd-sig-v1")
+    uint8_t signingKey[BIO_KEY_LEN];
+    if (bio_hmac_sha256(deviceSecret_, 32,
+                        (const uint8_t*)"bio-cmd-sig-v1",
+                        strlen("bio-cmd-sig-v1"),
+                        signingKey) != 0) {
+        ESP_LOGE(TAG, "命令签名密钥派生失败");
+        return "";
+    }
+
+    uint8_t sig[BIO_SIG_LEN];
+    if (bio_hmac_sha256(signingKey, sizeof(signingKey),
+                        (const uint8_t*)payload.data(), payload.size(),
+                        sig) != 0) {
+        ESP_LOGE(TAG, "命令签名计算失败");
+        return "";
+    }
+
+    return base64Encode(sig, sizeof(sig));
+}
+
 std::string SecurityBridge::base64Encode(const uint8_t* data, size_t len) {
     std::string result;
     result.reserve(((len + 2) / 3) * 4);

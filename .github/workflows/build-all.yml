@@ -113,7 +113,8 @@ jobs:
         if: runner.os == 'Linux' && matrix.cgo == 1
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev gcc libc6-dev
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev gcc libc6-dev \
+            libwayland-dev libxkbcommon-dev libxcb1-dev libx11-xcb-dev
 
       - name: Build (Unix)
         if: runner.os != 'Windows'
@@ -122,11 +123,19 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: ${{ matrix.cgo }}
+          GOPROXY: https://goproxy.cn,direct
         run: |
           BUILD_TAGS="${{ matrix.tags }}"
           OUTPUT="sun-growth-${{ matrix.name }}${{ matrix.ext }}"
           go build -tags "${BUILD_TAGS}" -o "../dist/${OUTPUT}" .
           echo "Built: dist/${OUTPUT}"
+
+      - name: Install MinGW for Windows GUI
+        if: runner.os == 'Windows' && matrix.cgo == 1
+        run: |
+          choco install mingw -y --no-progress
+          "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> $env:GITHUB_PATH
+        shell: pwsh
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
@@ -135,6 +144,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: ${{ matrix.cgo }}
+          GOPROXY: https://goproxy.cn,direct
         run: |
           $env:BUILD_TAGS = "${{ matrix.tags }}"
           $env:OUTPUT = "sun-growth-${{ matrix.name }}${{ matrix.ext }}"

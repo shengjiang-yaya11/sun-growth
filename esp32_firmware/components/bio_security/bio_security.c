@@ -233,6 +233,45 @@ void bio_sha256(const uint8_t *data, size_t len, uint8_t *out_32)
     BIO_SHA256(data, len, out_32, 0);
 }
 
+int bio_hmac_sha256(const uint8_t *key, size_t key_len,
+                    const uint8_t *data, size_t data_len,
+                    uint8_t *out_32)
+{
+    if (key == NULL || data == NULL || out_32 == NULL || key_len == 0) {
+        return -1;
+    }
+
+    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if (info == NULL) {
+        return -1;
+    }
+
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+
+    int ret = mbedtls_md_setup(&ctx, info, 1);
+    if (ret != 0) {
+        mbedtls_md_free(&ctx);
+        return -1;
+    }
+
+    ret = mbedtls_md_hmac_starts(&ctx, key, key_len);
+    if (ret != 0) {
+        mbedtls_md_free(&ctx);
+        return -1;
+    }
+
+    ret = mbedtls_md_hmac_update(&ctx, data, data_len);
+    if (ret != 0) {
+        mbedtls_md_free(&ctx);
+        return -1;
+    }
+
+    ret = mbedtls_md_hmac_finish(&ctx, out_32);
+    mbedtls_md_free(&ctx);
+    return ret;
+}
+
 int bio_sign_request(const uint8_t *secret, size_t secret_len,
                      const uint8_t *device_id, size_t id_len,
                      const uint8_t *timestamp, size_t ts_len,

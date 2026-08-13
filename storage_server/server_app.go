@@ -103,6 +103,31 @@ func NewServerApp(configPath string) (*ServerApp, error) {
 	return app, nil
 }
 
+// SetDataDir 运行时切换照片保存目录，并立即让上传接口写入新目录。
+// 该操作只重建存储引擎，不重启 HTTP 服务器。
+func (app *ServerApp) SetDataDir(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("保存目录不能为空")
+	}
+
+	newStore, err := storage.New(dir)
+	if err != nil {
+		return err
+	}
+
+	app.mu.Lock()
+	app.Store = newStore
+	if app.Cfg != nil {
+		app.Cfg.CustomSaveDir = dir
+		app.Cfg.DataDir = dir
+	}
+	app.mu.Unlock()
+
+	// handleUpload 使用全局 store，运行时切换必须同步全局变量。
+	store = newStore
+	return nil
+}
+
 // Start 启动 HTTP 服务器 (非阻塞)
 func (app *ServerApp) Start() error {
 	app.mu.Lock()

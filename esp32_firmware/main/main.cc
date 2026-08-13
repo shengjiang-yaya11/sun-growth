@@ -55,6 +55,7 @@
 #include "led_strip.h"
 #include "driver/gpio.h"
 #include <cstring>
+#include <cstdlib>
 
 static const char* TAG = "MAIN";
 
@@ -116,6 +117,31 @@ bool captureAndUpload() {
     }
 
     return ok;
+}
+
+static bool updateCaptureIntervalFromCommand(const std::string& params) {
+    const char* pos = strstr(params.c_str(), "\"interval\"");
+    if (!pos) return false;
+    pos = strchr(pos, ':');
+    if (!pos) return false;
+
+    int interval = atoi(pos + 1);
+    if (interval < 5 || interval > 86400) {
+        ESP_LOGE(TAG, "拍照间隔无效: %d (允许 5-86400 秒)", interval);
+        return false;
+    }
+
+    captureInterval = (uint32_t)interval;
+
+    nvs_handle_t handle;
+    if (nvs_open(NVS_NAMESPACE_PROVISION, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_u32(handle, NVS_KEY_INTERVAL, (uint32_t)interval);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+
+    ESP_LOGI(TAG, "拍照间隔已更新为 %d 秒", interval);
+    return true;
 }
 
 // 初始化 LED
@@ -382,18 +408,10 @@ extern "C" void app_main() {
         ESP_LOGI(TAG, "收到远程拍照命令");
         return CommandServer::buildResponse("ok", "\"capture queued\"");
     });
-    CommandServer::registerHandler("status", [](const std::string&) -> std::string {
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-            "{\"wifi_rssi\":0,\"uptime_sec\":0,\"fw_version\":\"%s\",\"free_heap\":%u,\"photo_count\":%u,\"fail_count\":%u}",
-            FIRMWARE_VERSION,
-            (unsigned)esp_get_free_heap_size(),
-            (unsigned)photoCount,
-            (unsigned)failCount);
-        return CommandServer::buildResponse("ok", std::string(buf));
-    });
     CommandServer::registerHandler("set_config", [](const std::string& params) -> std::string {
-        ESP_LOGI(TAG, "收到配置更新");
+        if (!updateCaptureIntervalFromCommand(params)) {
+            return CommandServer::buildResponse("error", "{\"msg\":\"invalid interval\"}");
+        }
         return CommandServer::buildResponse("ok", "\"config updated\"");
     });
     CommandServer::registerHandler("restart", [](const std::string&) -> std::string {
@@ -451,7 +469,6 @@ extern "C" void app_main() {
     TickType_t lastWifiCheck = 0;
     TickType_t lastHeapLog   = xTaskGetTickCount();
     TickType_t lastRetry     = xTaskGetTickCount();
-    TickType_t interval      = pdMS_TO_TICKS(captureInterval * 1000);
 
     while (true) {
         TickType_t now = xTaskGetTickCount();
@@ -469,7 +486,8 @@ extern "C" void app_main() {
         }
 
         // 定时拍照
-        if ((now - lastCapture) >= interval) {
+        TickType_t intervalTicks = pdMS_TO_TICKS(captureInterval * 1000);
+        if ((now - lastCapture) >= intervalTicks) {
             lastCapture = now;
             WifiManager::ensureConnected();
             captureAndUpload();
