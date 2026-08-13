@@ -232,6 +232,11 @@ std::string CommandServer::processCommand(const std::string& requestJson) {
     return buildResponse("error", "{\"msg\":\"unknown command: " + cmd + "\"}");
 }
 
+std::string CommandServer::buildResponse(const std::string& status,
+                                          const std::string& data) {
+    return "{\"status\":\"" + status + "\",\"data\":" + data + "}\n";
+}
+
 // ==================== TCP 服务器 ====================
 
 void CommandServer::serverTask(void* arg) {
